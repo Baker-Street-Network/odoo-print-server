@@ -2,6 +2,7 @@ using Newtonsoft.Json;
 using OdooPrintServer.Properties;
 using System.Drawing.Printing;
 using System.Net;
+using System.Net.Http.Json;
 using System.Net.Sockets;
 
 namespace OdooPrintServer
@@ -56,6 +57,7 @@ namespace OdooPrintServer
             printIps.Text += string.Join(", ", GetLocalIPAddresses());
 
             pathTextbox.Text = GetSettingsDirectory();
+            odooUrl.Text = Settings.Default.url;
             ReloadPrinters();
         }
 
@@ -135,9 +137,40 @@ namespace OdooPrintServer
             ReloadPrinters();
         }
 
-        private void connectButton_Click(object sender, EventArgs e)
+        private async void connectButton_Click(object sender, EventArgs e)
         {
-            
+            string url = odooUrl.Text + "/odoo_print_server/verify_connection";
+            using HttpClient client = new HttpClient();
+
+            try
+            {
+                HttpResponseMessage response = await client.GetAsync(url);
+                if (response.StatusCode == HttpStatusCode.NotFound)
+                {
+                    MessageBox.Show("The Odoo Print Server is not installed on this Odoo instance.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                string responseBody = await response.Content.ReadAsStringAsync();
+
+                var jsonResponse = JsonConvert.DeserializeObject<Dictionary<string, object>>(responseBody);
+                if (jsonResponse != null && jsonResponse.ContainsKey("error"))
+                {
+                    MessageBox.Show("Error: " + jsonResponse["error"].ToString(), "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                else
+                {
+                    MessageBox.Show("Connection successful!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch (HttpRequestException ex)
+            {
+                MessageBox.Show("Request error: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Unexpected error: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void dataGridView1_CellValueChanged(object sender, DataGridViewCellEventArgs e)
@@ -178,13 +211,70 @@ namespace OdooPrintServer
             // delete button
             if (dataGridView1.Columns[e.ColumnIndex] is DataGridViewButtonColumn && e.ColumnIndex == 3)
             {
-                int number = int.Parse(dataGridView1.Rows[e.RowIndex].Cells[0].Value.ToString()!);
-                Selections.RemoveAll(s => s.Number == number);
-                SaveNewConfiguration();
+                var confirmResult = MessageBox.Show("Are you sure to delete this printer?",
+                    "Confirm Delete",
+                    MessageBoxButtons.YesNo);
+
+                if (confirmResult == DialogResult.Yes)
+                {
+                    int number = int.Parse(dataGridView1.Rows[e.RowIndex].Cells[0].Value.ToString()!);
+                    Selections.RemoveAll(s => s.Number == number);
+                    SaveNewConfiguration();
+                }
             }
         }
 
-        private void odooUrl_TextChanged(object sender, EventArgs e) =>
+        private void odooUrl_TextChanged(object sender, EventArgs e)
+        {
             Settings.Default.url = odooUrl.Text;
+            Settings.Default.Save();
+        }
+
+        private async void syncDetailsButton_Click(object sender, EventArgs e)
+        {
+            string url = odooUrl.Text + "/odoo_print_server/sync_remote_channels";
+            using HttpClient client = new();
+
+            try
+            {
+                HttpResponseMessage response = await client.PostAsJsonAsync(url, new
+                {
+                    machine_name = Environment.MachineName,
+                    channels = Selections.Select(s => (
+                        new
+                        {
+                            number = s.Number,
+                            name = s.Name,
+                            printer_name = s.Settings.PrinterName
+                        }))
+                });
+
+                if (response.StatusCode == HttpStatusCode.NotFound)
+                {
+                    MessageBox.Show("The Odoo Print Server is not installed on this Odoo instance.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                string responseBody = await response.Content.ReadAsStringAsync();
+
+                var jsonResponse = JsonConvert.DeserializeObject<Dictionary<string, object>>(responseBody);
+                if (jsonResponse != null && jsonResponse.ContainsKey("error"))
+                {
+                    MessageBox.Show("Error: " + jsonResponse["error"].ToString(), "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                else
+                {
+                    MessageBox.Show("Sync completed successfully.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch (HttpRequestException ex)
+            {
+                MessageBox.Show("Request error: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Unexpected error: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
     }
 }

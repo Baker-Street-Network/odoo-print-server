@@ -46,6 +46,7 @@
             label2 = new Label();
             odooUrl = new TextBox();
             connectButton = new Button();
+            syncDetailsButton = new Button();
             ((System.ComponentModel.ISupportInitialize)dataGridView1).BeginInit();
             SuspendLayout();
             // 
@@ -181,11 +182,22 @@
             connectButton.UseVisualStyleBackColor = true;
             connectButton.Click += connectButton_Click;
             // 
+            // syncDetailsButton
+            // 
+            syncDetailsButton.Location = new Point(130, 165);
+            syncDetailsButton.Name = "syncDetailsButton";
+            syncDetailsButton.Size = new Size(138, 34);
+            syncDetailsButton.TabIndex = 11;
+            syncDetailsButton.Text = "Sync to Odoo";
+            syncDetailsButton.UseVisualStyleBackColor = true;
+            syncDetailsButton.Click += syncDetailsButton_Click;
+            // 
             // Form1
             // 
             AutoScaleDimensions = new SizeF(10F, 25F);
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(855, 563);
+            Controls.Add(syncDetailsButton);
             Controls.Add(connectButton);
             Controls.Add(odooUrl);
             Controls.Add(label2);
@@ -222,5 +234,6 @@
         private DataGridViewTextBoxColumn configNameColumn;
         private DataGridViewButtonColumn editGridButton;
         private DataGridViewButtonColumn removeGridButton;
+        private Button syncDetailsButton;
     }
 }
