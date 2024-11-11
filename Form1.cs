@@ -1,7 +1,9 @@
 using Newtonsoft.Json;
 using OdooPrintServer.Properties;
-using PdfSharp.Pdf.IO;
+using PdfSharp.Drawing;
 using PdfSharp.Pdf;
+using PdfSharp.Pdf.IO;
+using System.Buffers.Text;
 using System.Drawing.Printing;
 using System.Net;
 using System.Net.Http.Json;
@@ -117,12 +119,12 @@ namespace OdooPrintServer
                                 return;
                             }
 
-                            var bytes = data.result.data.ToString();
-                            //PdfDocument doc = PdfReader.Open(new MemoryStream(Encoding.UTF8.GetBytes(bytes)));
+                            var rstring = data.result.data.ToString();
 
+                            var bytes = Convert.FromBase64String(rstring);
 
                             string tempFilePath = Path.GetTempFileName();
-                            await File.WriteAllTextAsync(tempFilePath, data.result.data.ToString());
+                            File.WriteAllBytes(tempFilePath, bytes);
 
                             PrintFile(tempFilePath, (int)printerNumber);
                         }
@@ -145,10 +147,17 @@ namespace OdooPrintServer
             try
             {
                 var printerSelection = Selections.First(s => s.Number == printerNumber);
-                    
+
                 PdfiumViewer.PdfDocument pdfDocument = PdfiumViewer.PdfDocument.Load(filePath);
+
+                //pdfRenderer1.Load(pdfDocument);
+                //pdfViewer1.Document = pdfDocument;
+
                 var print = pdfDocument.CreatePrintDocument(PdfiumViewer.PdfPrintMode.CutMargin);
                 print.DefaultPageSettings.PrinterSettings.PrinterName = printerSelection.Settings.PrinterName;
+
+                print.PrinterSettings.DefaultPageSettings.PaperSize = new PaperSize("Custom", 2625, 100);
+                print.DefaultPageSettings.PaperSize = new PaperSize("Custom", 2625, 100);
                 print.Print();
 
                 logs.AppendText($"Printed file {filePath} to printer {printerSelection.Settings.PrinterName}." + Environment.NewLine);
