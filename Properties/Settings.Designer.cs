@@ -34,16 +34,34 @@ namespace OdooPrintServer.Properties {
                 this["configuration"] = value;
             }
         }
-        
+
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
         [global::System.Configuration.DefaultSettingValueAttribute("")]
-        public string url {
-            get {
+        public string url
+        {
+            get
+            {
                 return ((string)(this["url"]));
             }
-            set {
+            set
+            {
                 this["url"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
+        public string secret
+        {
+            get
+            {
+                return ((string)(this["secret"]));
+            }
+            set
+            {
+                this["secret"] = value;
             }
         }
     }

@@ -1,9 +1,13 @@
 using Newtonsoft.Json;
 using OdooPrintServer.Properties;
+using PdfSharp.Pdf.IO;
+using PdfSharp.Pdf;
 using System.Drawing.Printing;
 using System.Net;
 using System.Net.Http.Json;
 using System.Net.Sockets;
+using System.Net.WebSockets;
+using System.Text;
 
 namespace OdooPrintServer
 {
@@ -18,7 +22,7 @@ namespace OdooPrintServer
             return ipAddresses;
         }
 
-        public static string GetSettingsDirectory()
+        public string GetSettingsDirectory()
         {
             if (string.IsNullOrEmpty(Settings.Default.configuration))
             {
@@ -27,14 +31,17 @@ namespace OdooPrintServer
                 Directory.CreateDirectory(myAppDirectory);
                 Settings.Default.configuration = myAppDirectory;
                 Settings.Default.Save();
+                logs.AppendText($"Configuration directory found/created at {myAppDirectory}" + Environment.NewLine);
                 return myAppDirectory;
             }
 
+            logs.AppendText($"Configuration directory found at {Settings.Default.configuration}" + Environment.NewLine);
             return Settings.Default.configuration;
         }
 
         public void ReloadPrinters()
         {
+            logs.AppendText("Reloading printers..." + Environment.NewLine);
             var path = Path.Combine(Settings.Default.configuration, "configuration.json");
             if (File.Exists(path))
             {
@@ -46,9 +53,111 @@ namespace OdooPrintServer
             dataGridView1.Rows.Clear();
             foreach (PrinterSelection selection in Selections)
                 dataGridView1.Rows.Add(selection.Number, selection.Name, "Edit Printer", "Delete");
+
+            logs.AppendText("Printers reloaded." + Environment.NewLine);
         }
 
         public List<PrinterSelection> Selections { get; set; } = [];
+
+        CancellationTokenSource CancellationTokenSource = new();
+        public async void StartPolling()
+        {
+            logs.AppendText("Starting polling..." + Environment.NewLine);
+            using ClientWebSocket webSocket = new();
+            webSocket.Options.SetRequestHeader("Origin", "127.0.0.1");
+            Uri serverUri = new($"{Settings.Default.url.Replace("http", "ws")}/websocket");
+
+            try
+            {
+                await webSocket.ConnectAsync(serverUri, CancellationTokenSource.Token);
+
+                if (webSocket.State == WebSocketState.Open)
+                {
+                    var poll = new
+                    {
+                        event_name = "subscribe",
+                        data = new {
+                            channels = new string[] { Settings.Default.secret, "new_print_job" },
+                            last = 0
+                        }
+                    };
+                    await webSocket.SendAsync(Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(poll)), WebSocketMessageType.Text, true, CancellationTokenSource.Token);
+                }
+
+                byte[] buffer = new byte[1024 * 4];
+                while (webSocket.State == WebSocketState.Open)
+                {
+                    WebSocketReceiveResult result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationTokenSource.Token);
+                    string jsonString = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                    var deserializedObject = JsonConvert.DeserializeObject<dynamic>(jsonString);
+
+                    foreach (var j in deserializedObject)
+                    {
+                        var job = j.message.payload;
+                        var jobId = job.id;
+                        var secret = job.secret;
+                        var machineName = job.machine_name;
+                        var printerNumber = job.printer_number;
+
+                        logs.AppendText($"New print job received. Job: {jobId} Secret: {secret} Machine: {machineName} Printer: {printerNumber}" + Environment.NewLine);
+
+                        if (machineName == Environment.MachineName && Selections.Any(s => s.Number == (int)printerNumber))
+                        {
+                            string fileUrl = $"{Settings.Default.url}/odoo_print_server/download_job/{jobId}";
+
+                            using HttpClient client = new();
+                            var response = await client.PostAsJsonAsync(fileUrl, new { application_secret = Settings.Default.secret, job_secret = secret.ToString() });
+                            response.EnsureSuccessStatusCode();
+                            var fileBytes = await response.Content.ReadAsStringAsync();
+                            var data = JsonConvert.DeserializeObject<dynamic>(fileBytes);
+
+                            if (fileBytes.Contains("error"))
+                            {
+                                logs.AppendText($"Error during report download: {data.result.error}" + Environment.NewLine);
+                                return;
+                            }
+
+                            var bytes = data.result.data.ToString();
+                            //PdfDocument doc = PdfReader.Open(new MemoryStream(Encoding.UTF8.GetBytes(bytes)));
+
+
+                            string tempFilePath = Path.GetTempFileName();
+                            await File.WriteAllTextAsync(tempFilePath, data.result.data.ToString());
+
+                            PrintFile(tempFilePath, (int)printerNumber);
+                        }
+                    }
+                }
+            }
+            catch (WebSocketException ex)
+            {
+                logs.AppendText($"WebSocket error: {ex.Message}. Manual re-connection needed." + Environment.NewLine);
+            }
+            catch (TaskCanceledException)
+            {
+                // it did its job
+                logs.AppendText("Polling stopped. TaskCancelledException" + Environment.NewLine);
+            }
+        }
+
+        private void PrintFile(string filePath, int printerNumber)
+        {
+            try
+            {
+                var printerSelection = Selections.First(s => s.Number == printerNumber);
+                    
+                PdfiumViewer.PdfDocument pdfDocument = PdfiumViewer.PdfDocument.Load(filePath);
+                var print = pdfDocument.CreatePrintDocument(PdfiumViewer.PdfPrintMode.CutMargin);
+                print.DefaultPageSettings.PrinterSettings.PrinterName = printerSelection.Settings.PrinterName;
+                print.Print();
+
+                logs.AppendText($"Printed file {filePath} to printer {printerSelection.Settings.PrinterName}." + Environment.NewLine);
+            }
+            catch (Exception e)
+            {
+                logs.AppendText($"Error: {e}");
+            }
+        }
 
         public Form1()
         {
@@ -58,7 +167,14 @@ namespace OdooPrintServer
 
             pathTextbox.Text = GetSettingsDirectory();
             odooUrl.Text = Settings.Default.url;
+            odooSecret.Text = Settings.Default.secret;
             ReloadPrinters();
+
+            //start the long polling here
+            if (!string.IsNullOrEmpty(odooUrl.Text) && !string.IsNullOrEmpty(odooSecret.Text))
+                StartPolling();
+
+            logs.AppendText("Application started." + Environment.NewLine);
         }
 
         private void button1_Click(object sender, EventArgs e)
@@ -144,33 +260,43 @@ namespace OdooPrintServer
 
             try
             {
-                HttpResponseMessage response = await client.GetAsync(url);
+                HttpResponseMessage response = await client.PostAsJsonAsync(url, new {
+                    application_secret = Settings.Default.secret
+                });
                 if (response.StatusCode == HttpStatusCode.NotFound)
                 {
+                    logs.AppendText("The Odoo Print Server is not installed on this Odoo instance." + Environment.NewLine);
                     MessageBox.Show("The Odoo Print Server is not installed on this Odoo instance.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
 
                 string responseBody = await response.Content.ReadAsStringAsync();
-
-                var jsonResponse = JsonConvert.DeserializeObject<Dictionary<string, object>>(responseBody);
-                if (jsonResponse != null && jsonResponse.ContainsKey("error"))
+                var jsonResponse = JsonConvert.DeserializeObject<dynamic>(responseBody);
+                if (jsonResponse != null && responseBody.Contains("error"))
                 {
-                    MessageBox.Show("Error: " + jsonResponse["error"].ToString(), "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    logs.AppendText("Error: " + jsonResponse.result.error.ToString() + Environment.NewLine);
+                    MessageBox.Show("Error: " + jsonResponse.result.error.ToString(), "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
                 else
                 {
+                    logs.AppendText("Connection successful!" + Environment.NewLine);
                     MessageBox.Show("Connection successful!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
             }
             catch (HttpRequestException ex)
             {
+                logs.AppendText("Request error: " + ex.Message + Environment.NewLine);
                 MessageBox.Show("Request error: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             catch (Exception ex)
             {
+                logs.AppendText("Unexpected error: " + ex.Message + Environment.NewLine);
                 MessageBox.Show("Unexpected error: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+
+            CancellationTokenSource.Cancel();
+
+            StartPolling();
         }
 
         private void dataGridView1_CellValueChanged(object sender, DataGridViewCellEventArgs e)
@@ -251,6 +377,7 @@ namespace OdooPrintServer
 
                 if (response.StatusCode == HttpStatusCode.NotFound)
                 {
+                    logs.AppendText("The Odoo Print Server is not installed on this Odoo instance." + Environment.NewLine);
                     MessageBox.Show("The Odoo Print Server is not installed on this Odoo instance.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
@@ -260,21 +387,31 @@ namespace OdooPrintServer
                 var jsonResponse = JsonConvert.DeserializeObject<Dictionary<string, object>>(responseBody);
                 if (jsonResponse != null && jsonResponse.ContainsKey("error"))
                 {
+                    logs.AppendText("Error: " + jsonResponse["error"].ToString() + Environment.NewLine);
                     MessageBox.Show("Error: " + jsonResponse["error"].ToString(), "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
                 else
                 {
+                    logs.AppendText("Sync completed successfully." + Environment.NewLine);
                     MessageBox.Show("Sync completed successfully.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
             }
             catch (HttpRequestException ex)
             {
+                logs.AppendText("Request error: " + ex.Message + Environment.NewLine);
                 MessageBox.Show("Request error: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             catch (Exception ex)
             {
+                logs.AppendText("Unexpected error: " + ex.Message + Environment.NewLine);
                 MessageBox.Show("Unexpected error: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        private void textBox1_TextChanged(object sender, EventArgs e)
+        {
+            Settings.Default.secret = odooSecret.Text;
+            Settings.Default.Save();
         }
     }
 }

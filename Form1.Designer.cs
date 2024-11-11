@@ -47,6 +47,8 @@
             odooUrl = new TextBox();
             connectButton = new Button();
             syncDetailsButton = new Button();
+            odooSecret = new TextBox();
+            logs = new TextBox();
             ((System.ComponentModel.ISupportInitialize)dataGridView1).BeginInit();
             SuspendLayout();
             // 
@@ -166,9 +168,10 @@
             // 
             // odooUrl
             // 
-            odooUrl.Location = new Point(12, 37);
+            odooUrl.Location = new Point(305, 37);
             odooUrl.Name = "odooUrl";
-            odooUrl.Size = new Size(713, 31);
+            odooUrl.PlaceholderText = "Odoo Url";
+            odooUrl.Size = new Size(420, 31);
             odooUrl.TabIndex = 9;
             odooUrl.TextChanged += odooUrl_TextChanged;
             // 
@@ -192,11 +195,32 @@
             syncDetailsButton.UseVisualStyleBackColor = true;
             syncDetailsButton.Click += syncDetailsButton_Click;
             // 
+            // odooSecret
+            // 
+            odooSecret.Location = new Point(9, 37);
+            odooSecret.Name = "odooSecret";
+            odooSecret.PlaceholderText = "Application Secret";
+            odooSecret.Size = new Size(290, 31);
+            odooSecret.TabIndex = 12;
+            odooSecret.UseSystemPasswordChar = true;
+            odooSecret.TextChanged += textBox1_TextChanged;
+            // 
+            // logs
+            // 
+            logs.Location = new Point(866, 9);
+            logs.Multiline = true;
+            logs.Name = "logs";
+            logs.ReadOnly = true;
+            logs.Size = new Size(350, 545);
+            logs.TabIndex = 13;
+            // 
             // Form1
             // 
             AutoScaleDimensions = new SizeF(10F, 25F);
             AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(855, 563);
+            ClientSize = new Size(1228, 566);
+            Controls.Add(logs);
+            Controls.Add(odooSecret);
             Controls.Add(syncDetailsButton);
             Controls.Add(connectButton);
             Controls.Add(odooUrl);
@@ -208,7 +232,9 @@
             Controls.Add(addPrinterButton);
             Controls.Add(dataGridView1);
             Controls.Add(printIps);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
             Icon = (Icon)resources.GetObject("$this.Icon");
+            MaximizeBox = false;
             Name = "Form1";
             Text = "Odoo Print Server";
             ((System.ComponentModel.ISupportInitialize)dataGridView1).EndInit();
@@ -235,5 +261,7 @@
         private DataGridViewButtonColumn editGridButton;
         private DataGridViewButtonColumn removeGridButton;
         private Button syncDetailsButton;
+        private TextBox odooSecret;
+        private TextBox logs;
     }
 }
