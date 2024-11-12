@@ -1,9 +1,5 @@
 using Newtonsoft.Json;
 using OdooPrintServer.Properties;
-using PdfSharp.Drawing;
-using PdfSharp.Pdf;
-using PdfSharp.Pdf.IO;
-using System.Buffers.Text;
 using System.Drawing.Printing;
 using System.Net;
 using System.Net.Http.Json;
@@ -78,7 +74,8 @@ namespace OdooPrintServer
                     var poll = new
                     {
                         event_name = "subscribe",
-                        data = new {
+                        data = new
+                        {
                             channels = new string[] { Settings.Default.secret, "new_print_job" },
                             last = 0
                         }
@@ -150,14 +147,9 @@ namespace OdooPrintServer
 
                 PdfiumViewer.PdfDocument pdfDocument = PdfiumViewer.PdfDocument.Load(filePath);
 
-                //pdfRenderer1.Load(pdfDocument);
-                //pdfViewer1.Document = pdfDocument;
-
-                var print = pdfDocument.CreatePrintDocument(PdfiumViewer.PdfPrintMode.CutMargin);
+                var print = pdfDocument.CreatePrintDocument();
                 print.DefaultPageSettings.PrinterSettings.PrinterName = printerSelection.Settings.PrinterName;
 
-                print.PrinterSettings.DefaultPageSettings.PaperSize = new PaperSize("Custom", 2625, 100);
-                print.DefaultPageSettings.PaperSize = new PaperSize("Custom", 2625, 100);
                 print.Print();
 
                 logs.AppendText($"Printed file {filePath} to printer {printerSelection.Settings.PrinterName}." + Environment.NewLine);
@@ -269,7 +261,8 @@ namespace OdooPrintServer
 
             try
             {
-                HttpResponseMessage response = await client.PostAsJsonAsync(url, new {
+                HttpResponseMessage response = await client.PostAsJsonAsync(url, new
+                {
                     application_secret = Settings.Default.secret
                 });
                 if (response.StatusCode == HttpStatusCode.NotFound)
@@ -421,6 +414,11 @@ namespace OdooPrintServer
         {
             Settings.Default.secret = odooSecret.Text;
             Settings.Default.Save();
+        }
+
+        private void logs_TextChanged(object sender, EventArgs e)
+        {
+
         }
     }
 }

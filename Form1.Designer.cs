@@ -49,6 +49,7 @@
             syncDetailsButton = new Button();
             odooSecret = new TextBox();
             logs = new TextBox();
+            printDocument2 = new System.Drawing.Printing.PrintDocument();
             ((System.ComponentModel.ISupportInitialize)dataGridView1).BeginInit();
             SuspendLayout();
             // 
@@ -213,6 +214,7 @@
             logs.ReadOnly = true;
             logs.Size = new Size(350, 545);
             logs.TabIndex = 13;
+            logs.TextChanged += logs_TextChanged;
             // 
             // Form1
             // 
@@ -263,5 +265,6 @@
         private Button syncDetailsButton;
         private TextBox odooSecret;
         private TextBox logs;
+        private System.Drawing.Printing.PrintDocument printDocument2;
     }
 }
