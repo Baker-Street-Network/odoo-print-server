@@ -58,8 +58,14 @@ namespace OdooPrintServer
         public List<PrinterSelection> Selections { get; set; } = [];
 
         CancellationTokenSource CancellationTokenSource = new();
+        CancellationTokenSource ConnectCancellationTokenSource = new();
+        CancellationTokenSource ReceiveCancellationTokenSource = new();
         public async void StartPolling()
         {
+            CancellationTokenSource = new();
+            ConnectCancellationTokenSource = new();
+            ReceiveCancellationTokenSource = new();
+
             logs.AppendText("Starting polling..." + Environment.NewLine);
             using ClientWebSocket webSocket = new();
             webSocket.Options.SetRequestHeader("Origin", "127.0.0.1");
@@ -67,7 +73,7 @@ namespace OdooPrintServer
 
             try
             {
-                await webSocket.ConnectAsync(serverUri, CancellationTokenSource.Token);
+                await webSocket.ConnectAsync(serverUri, ConnectCancellationTokenSource.Token);
 
                 if (webSocket.State == WebSocketState.Open)
                 {
@@ -86,7 +92,7 @@ namespace OdooPrintServer
                 byte[] buffer = new byte[1024 * 4];
                 while (webSocket.State == WebSocketState.Open)
                 {
-                    WebSocketReceiveResult result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationTokenSource.Token);
+                    WebSocketReceiveResult result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), ReceiveCancellationTokenSource.Token);
                     string jsonString = Encoding.UTF8.GetString(buffer, 0, result.Count);
                     var deserializedObject = JsonConvert.DeserializeObject<dynamic>(jsonString);
 
