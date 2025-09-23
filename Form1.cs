@@ -60,88 +60,152 @@ namespace OdooPrintServer
         CancellationTokenSource CancellationTokenSource = new();
         CancellationTokenSource ConnectCancellationTokenSource = new();
         CancellationTokenSource ReceiveCancellationTokenSource = new();
+        private bool _isReconnecting = false;
+        private int _reconnectAttempts = 0;
+        private readonly int _maxReconnectAttempts = 100; // Effectively infinite for this use case
+        private readonly int _initialReconnectDelay = 1000; // 1 second initial delay
+
         public async void StartPolling()
         {
             CancellationTokenSource = new();
             ConnectCancellationTokenSource = new();
             ReceiveCancellationTokenSource = new();
-
+            
+            _reconnectAttempts = 0;
+            _isReconnecting = false;
+            
             logs.AppendText("Starting polling..." + Environment.NewLine);
-            using ClientWebSocket webSocket = new();
-            webSocket.Options.SetRequestHeader("Origin", "127.0.0.1");
-            Uri serverUri = new($"{Settings.Default.url.Replace("http", "ws")}/websocket");
+            await ConnectAndPollWithRetry();
+        }
 
-            try
+        private async Task ConnectAndPollWithRetry()
+        {
+            while (!CancellationTokenSource.IsCancellationRequested)
             {
-                await webSocket.ConnectAsync(serverUri, ConnectCancellationTokenSource.Token);
-
-                if (webSocket.State == WebSocketState.Open)
+                try
                 {
-                    var poll = new
+                    using ClientWebSocket webSocket = new();
+                    webSocket.Options.SetRequestHeader("Origin", "127.0.0.1");
+                    Uri serverUri = new($"{Settings.Default.url.Replace("http", "ws")}/websocket");
+
+                    try
                     {
-                        event_name = "subscribe",
-                        data = new
+                        if (_isReconnecting)
+                            logs.AppendText($"Attempting to reconnect (attempt {_reconnectAttempts + 1})..." + Environment.NewLine);
+
+                        await webSocket.ConnectAsync(serverUri, ConnectCancellationTokenSource.Token);
+
+                        if (_isReconnecting)
                         {
-                            channels = new string[] { Settings.Default.secret, "new_print_job" },
-                            last = 0
+                            logs.AppendText("Reconnection successful!" + Environment.NewLine);
+                            _isReconnecting = false;
+                            _reconnectAttempts = 0;
                         }
-                    };
-                    await webSocket.SendAsync(Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(poll)), WebSocketMessageType.Text, true, CancellationTokenSource.Token);
-                }
 
-                byte[] buffer = new byte[1024 * 4];
-                while (webSocket.State == WebSocketState.Open)
-                {
-                    WebSocketReceiveResult result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), ReceiveCancellationTokenSource.Token);
-                    string jsonString = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                    var deserializedObject = JsonConvert.DeserializeObject<dynamic>(jsonString);
-
-                    foreach (var j in deserializedObject)
-                    {
-                        var job = j.message.payload;
-                        var jobId = job.id;
-                        var secret = job.secret;
-                        var machineName = job.machine_name;
-                        var printerNumber = job.printer_number;
-
-                        logs.AppendText($"New print job received. Job: {jobId} Secret: {secret} Machine: {machineName} Printer: {printerNumber}" + Environment.NewLine);
-
-                        if (machineName == Environment.MachineName && Selections.Any(s => s.Number == (int)printerNumber))
+                        if (webSocket.State == WebSocketState.Open)
                         {
-                            string fileUrl = $"{Settings.Default.url}/odoo_print_server/download_job/{jobId}";
-
-                            using HttpClient client = new();
-                            var response = await client.PostAsJsonAsync(fileUrl, new { application_secret = Settings.Default.secret, job_secret = secret.ToString() });
-                            response.EnsureSuccessStatusCode();
-                            var fileBytes = await response.Content.ReadAsStringAsync();
-                            var data = JsonConvert.DeserializeObject<dynamic>(fileBytes);
-
-                            if (fileBytes.Contains("error"))
+                            var poll = new
                             {
-                                logs.AppendText($"Error during report download: {data.result.error}" + Environment.NewLine);
-                                return;
+                                event_name = "subscribe",
+                                data = new
+                                {
+                                    channels = new string[] { Settings.Default.secret, "new_print_job" },
+                                    last = 0
+                                }
+                            };
+                            await webSocket.SendAsync(Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(poll)), WebSocketMessageType.Text, true, CancellationTokenSource.Token);
+                        }
+
+                        byte[] buffer = new byte[1024 * 4];
+                        while (webSocket.State == WebSocketState.Open && !CancellationTokenSource.IsCancellationRequested)
+                        {
+                            WebSocketReceiveResult result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), ReceiveCancellationTokenSource.Token);
+                            string jsonString = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                            var deserializedObject = JsonConvert.DeserializeObject<dynamic>(jsonString);
+
+                            foreach (var j in deserializedObject)
+                            {
+                                var job = j.message.payload;
+                                var jobId = job.id;
+                                var secret = job.secret;
+                                var machineName = job.machine_name;
+                                var printerNumber = job.printer_number;
+
+                                logs.AppendText($"New print job received. Job: {jobId} Secret: {secret} Machine: {machineName} Printer: {printerNumber}" + Environment.NewLine);
+
+                                if (machineName == Environment.MachineName && Selections.Any(s => s.Number == (int)printerNumber))
+                                {
+                                    string fileUrl = $"{Settings.Default.url}/odoo_print_server/download_job/{jobId}";
+
+                                    using HttpClient client = new();
+                                    var response = await client.PostAsJsonAsync(fileUrl, new { application_secret = Settings.Default.secret, job_secret = secret.ToString() });
+                                    response.EnsureSuccessStatusCode();
+                                    var fileBytes = await response.Content.ReadAsStringAsync();
+                                    var data = JsonConvert.DeserializeObject<dynamic>(fileBytes);
+
+                                    if (fileBytes.Contains("error"))
+                                    {
+                                        logs.AppendText($"Error during report download: {data.result.error}" + Environment.NewLine);
+                                        continue; // Continue instead of return to keep connection alive
+                                    }
+
+                                    var rstring = data.result.data.ToString();
+                                    var bytes = Convert.FromBase64String(rstring);
+                                    string tempFilePath = Path.GetTempFileName();
+                                    File.WriteAllBytes(tempFilePath, bytes);
+                                    PrintFile(tempFilePath, (int)printerNumber);
+                                }
                             }
-
-                            var rstring = data.result.data.ToString();
-
-                            var bytes = Convert.FromBase64String(rstring);
-
-                            string tempFilePath = Path.GetTempFileName();
-                            File.WriteAllBytes(tempFilePath, bytes);
-
-                            PrintFile(tempFilePath, (int)printerNumber);
                         }
                     }
+                    catch (WebSocketException ex)
+                    {
+                        _isReconnecting = true;
+                        _reconnectAttempts++;
+                        
+                        logs.AppendText($"WebSocket error: {ex.Message}. Automatically reconnecting..." + Environment.NewLine);
+                        
+                        // Calculate backoff delay (exponential with jitter)
+                        int delayMs = Math.Min(_initialReconnectDelay * (1 << Math.Min(_reconnectAttempts, 6)), 30000);
+                        delayMs = new Random().Next(delayMs / 2, delayMs); // Add jitter
+                        
+                        logs.AppendText($"Waiting {delayMs / 1000.0:0.#} seconds before reconnection..." + Environment.NewLine);
+                        await Task.Delay(delayMs, CancellationTokenSource.Token);
+                        continue; // Continue the reconnection loop
+                    }
+                    catch (TaskCanceledException)
+                    {
+                        if (CancellationTokenSource.IsCancellationRequested)
+                        {
+                            logs.AppendText("Polling stopped by user." + Environment.NewLine);
+                            return; // Exit reconnection loop
+                        }
+                        
+                        _isReconnecting = true;
+                        _reconnectAttempts++;
+                        logs.AppendText("Connection task canceled. Automatically reconnecting..." + Environment.NewLine);
+                        await Task.Delay(1000, CancellationTokenSource.Token);
+                        continue; // Continue the reconnection loop
+                    }
+                    catch (Exception ex)
+                    {
+                        _isReconnecting = true;
+                        _reconnectAttempts++;
+                        logs.AppendText($"Unexpected error: {ex.Message}. Automatically reconnecting..." + Environment.NewLine);
+                        await Task.Delay(2000, CancellationTokenSource.Token);
+                        continue; // Continue the reconnection loop
+                    }
                 }
-            }
-            catch (WebSocketException ex)
-            {
-                logs.AppendText($"WebSocket error: {ex.Message}. Manual re-connection needed." + Environment.NewLine);
-            }
-            catch (TaskCanceledException)
-            {
-                // it did its job
-                logs.AppendText("Polling stopped. TaskCancelledException" + Environment.NewLine);
+                catch (TaskCanceledException)
+                {
+                    logs.AppendText("Reconnection process canceled." + Environment.NewLine);
+                    return; // Exit if cancellation was requested
+                }
+                catch (Exception ex)
+                {
+                    logs.AppendText($"Critical error in connection loop: {ex.Message}" + Environment.NewLine);
+                    await Task.Delay(5000, CancellationTokenSource.Token);
+                }
             }
         }
 
@@ -262,6 +326,14 @@ namespace OdooPrintServer
 
         private async void connectButton_Click(object sender, EventArgs e)
         {
+            // First, ensure all previous connections are properly cancelled
+            CancellationTokenSource.Cancel();
+            ConnectCancellationTokenSource.Cancel();
+            ReceiveCancellationTokenSource.Cancel();
+            
+            // Wait a bit to ensure connections have time to close properly
+            await Task.Delay(300);
+            
             string url = odooUrl.Text + "/odoo_print_server/verify_connection";
             using HttpClient client = new HttpClient();
 
@@ -302,8 +374,7 @@ namespace OdooPrintServer
                 MessageBox.Show("Unexpected error: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
 
-            CancellationTokenSource.Cancel();
-
+            // Start new connections after previous ones are properly closed
             StartPolling();
         }
 
