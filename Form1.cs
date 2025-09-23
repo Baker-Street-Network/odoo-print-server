@@ -64,6 +64,7 @@ namespace OdooPrintServer
         private int _reconnectAttempts = 0;
         private readonly int _maxReconnectAttempts = 100; // Effectively infinite for this use case
         private readonly int _initialReconnectDelay = 1000; // 1 second initial delay
+        private long _lastMessage = 0;
 
         public async void StartPolling()
         {
@@ -110,7 +111,7 @@ namespace OdooPrintServer
                                 data = new
                                 {
                                     channels = new string[] { Settings.Default.secret, "new_print_job" },
-                                    last = 0
+                                    last = _lastMessage
                                 }
                             };
                             await webSocket.SendAsync(Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(poll)), WebSocketMessageType.Text, true, CancellationTokenSource.Token);
@@ -130,6 +131,8 @@ namespace OdooPrintServer
                                 var secret = job.secret;
                                 var machineName = job.machine_name;
                                 var printerNumber = job.printer_number;
+
+                                _lastMessage = j.id;
 
                                 logs.AppendText($"New print job received. Job: {jobId} Secret: {secret} Machine: {machineName} Printer: {printerNumber}" + Environment.NewLine);
 
