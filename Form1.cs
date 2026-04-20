@@ -1,3 +1,5 @@
+using Docnet.Core;
+using Docnet.Core.Models;
 using Newtonsoft.Json;
 using OdooPrintServer.Properties;
 using System.Drawing.Printing;
@@ -221,18 +223,24 @@ namespace OdooPrintServer
             {
                 var printerSelection = Selections.First(s => s.Number == printerNumber);
 
-                PdfiumViewer.PdfDocument pdfDocument = PdfiumViewer.PdfDocument.Load(filePath);
+                string pdfPath = Path.ChangeExtension(filePath, ".pdf");
+                File.Move(filePath, pdfPath);
 
-                var print = pdfDocument.CreatePrintDocument();
-                print.DefaultPageSettings.PrinterSettings.PrinterName = printerSelection.Settings.PrinterName;
+                // Use bundled SumatraPDF for silent, verb-free printing.
+                string sumatraPath = Path.Combine(AppContext.BaseDirectory, "SumatraPDF.exe");
+                var psi = new System.Diagnostics.ProcessStartInfo(sumatraPath)
+                {
+                    Arguments = $"-print-to \"{printerSelection.Settings.PrinterName}\" -silent \"{pdfPath}\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
 
-                print.Print();
-
-                logs.AppendText($"Printed file {filePath} to printer {printerSelection.Settings.PrinterName}." + Environment.NewLine);
+                System.Diagnostics.Process.Start(psi);
+                logs.AppendText($"Sent print job to printer {printerSelection.Settings.PrinterName}." + Environment.NewLine);
             }
             catch (Exception e)
             {
-                logs.AppendText($"Error: {e}");
+                logs.AppendText($"Error: {e}" + Environment.NewLine);
             }
         }
 

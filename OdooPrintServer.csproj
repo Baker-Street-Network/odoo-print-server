@@ -17,10 +17,8 @@
 
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="Docnet.Core" Version="2.6.0" />
     <PackageReference Include="Velopack" Version="0.0.*" />
-    <PackageReference Include="PdfiumViewer.Native.x86.v8-xfa" Version="2018.4.8.256" />
-    <PackageReference Include="PdfiumViewer.Native.x86_64.v8-xfa" Version="2018.4.8.256" />
-    <PackageReference Include="PdfiumViewer.Updated" Version="2.14.4" />
   </ItemGroup>
 
   <ItemGroup>
@@ -30,6 +28,15 @@
       <DependentUpon>Settings.settings</DependentUpon>
     </Compile>
   </ItemGroup>
+    
+    <ItemGroup>
+        <None Update="SumatraPDF.exe">
+          <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
+        <None Update="SumatraPDF.exe">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
+    </ItemGroup>
 
   <ItemGroup>
     <None Update="Properties\Settings.settings">
