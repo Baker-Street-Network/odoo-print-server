@@ -6,6 +6,8 @@ using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text;
+using Velopack;
+using Velopack.Sources;
 
 namespace OdooPrintServer
 {
@@ -58,6 +60,7 @@ namespace OdooPrintServer
         public List<PrinterSelection> Selections { get; set; } = [];
 
         CancellationTokenSource CancellationTokenSource = new();
+        private readonly CancellationTokenSource _updateCheckCts = new();
         CancellationTokenSource ConnectCancellationTokenSource = new();
         CancellationTokenSource ReceiveCancellationTokenSource = new();
         private bool _isReconnecting = false;
@@ -249,6 +252,77 @@ namespace OdooPrintServer
                 StartPolling();
 
             logs.AppendText("Application started." + Environment.NewLine);
+
+            // Start background update checker
+            _ = Task.Run(() => UpdateCheckLoopAsync(_updateCheckCts.Token));
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            _updateCheckCts.Cancel();
+            base.OnFormClosing(e);
+        }
+
+        /// <summary>Thread-safe log append.</summary>
+        private void AppendLog(string message)
+        {
+            if (logs.InvokeRequired)
+                logs.Invoke(() => logs.AppendText(message + Environment.NewLine));
+            else
+                logs.AppendText(message + Environment.NewLine);
+        }
+
+        private async Task UpdateCheckLoopAsync(CancellationToken cancellationToken)
+        {
+            // Wait 30 seconds after startup before first check
+            try { await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken); }
+            catch (TaskCanceledException) { return; }
+
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await CheckForUpdatesAsync();
+                }
+                catch (Exception ex)
+                {
+                    AppendLog($"Update check error: {ex.Message}");
+                }
+
+                try { await Task.Delay(TimeSpan.FromHours(4), cancellationToken); }
+                catch (TaskCanceledException) { return; }
+            }
+        }
+
+        private async Task CheckForUpdatesAsync()
+        {
+            try
+            {
+                AppendLog("Checking for updates...");
+                var source = new GithubSource(
+                    "https://github.com/Baker-Street-Network/odoo-print-server",
+                    null,
+                    false);
+                var updateManager = new UpdateManager(source);
+
+                var newVersion = await updateManager.CheckForUpdatesAsync();
+                if (newVersion == null)
+                {
+                    AppendLog("No updates available.");
+                    return;
+                }
+
+                AppendLog($"Update available: {newVersion.TargetFullRelease.Version}. Downloading...");
+                await updateManager.DownloadUpdatesAsync(newVersion);
+                AppendLog("Update downloaded. Restarting to apply...");
+                updateManager.ApplyUpdatesAndRestart(newVersion);
+            }
+            catch (Exception ex) when (
+                ex.Message.Contains("not currently installed") ||
+                ex.Message.Contains("Unable to locate"))
+            {
+                // Running in dev/debug mode — not installed via Velopack, skip silently.
+            }
         }
 
         private void button1_Click(object sender, EventArgs e)
