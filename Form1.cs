@@ -229,8 +229,11 @@ namespace OdooPrintServer
                 File.Move(filePath, pdfPath);
 
                 // Use PDFtoImage to render PDF pages and print them
+                // Render at 300 DPI for high-quality printing
                 var pdfBytes = File.ReadAllBytes(pdfPath);
-                var pages = Conversion.ToImages(pdfBytes).ToList();
+                const int dpi = 300;
+                var options = new PDFtoImage.RenderOptions { Dpi = dpi };
+                var pages = Conversion.ToImages(pdfBytes, options: options).ToList();
                 int currentPage = 0;
 
                 var printDoc = new PrintDocument();
@@ -239,12 +242,42 @@ namespace OdooPrintServer
                 printDoc.PrinterSettings.Collate = printerSelection.Settings.Collate;
                 printDoc.PrinterSettings.Duplex = printerSelection.Settings.Duplex;
 
+                // Get the first page dimensions to set default page size
+                if (pages.Count > 0)
+                {
+                    var firstPage = pages[0];
+                    // Convert pixels to hundredths of an inch (PrintDocument uses 1/100th inch units)
+                    int widthInHundredths = (int)((firstPage.Width / (double)dpi) * 100);
+                    int heightInHundredths = (int)((firstPage.Height / (double)dpi) * 100);
+                    printDoc.DefaultPageSettings.PaperSize = new PaperSize("Custom", widthInHundredths, heightInHundredths);
+                }
+
                 printDoc.PrintPage += (sender, e) =>
                 {
                     if (currentPage < pages.Count)
                     {
-                        using var bitmap = pages[currentPage].ToBitmap();
-                        e.Graphics!.DrawImage(bitmap, e.PageBounds);
+                        var skBitmap = pages[currentPage];
+                        using var bitmap = skBitmap.ToBitmap();
+                        
+                        // Calculate the actual page dimensions in hundredths of an inch
+                        int widthInHundredths = (int)((skBitmap.Width / (double)dpi) * 100);
+                        int heightInHundredths = (int)((skBitmap.Height / (double)dpi) * 100);
+                        
+                        // Update page size for this specific page if dimensions differ
+                        if (e.PageSettings.PaperSize.Width != widthInHundredths || 
+                            e.PageSettings.PaperSize.Height != heightInHundredths)
+                        {
+                            e.PageSettings.PaperSize = new PaperSize("Custom", widthInHundredths, heightInHundredths);
+                        }
+                        
+                        // Draw the image at the correct physical size
+                        // Convert from pixels to hundredths of an inch for the drawing rectangle
+                        float widthInInches = skBitmap.Width / (float)dpi;
+                        float heightInInches = skBitmap.Height / (float)dpi;
+                        float widthInGraphicsUnits = widthInInches * e.Graphics!.DpiX;
+                        float heightInGraphicsUnits = heightInInches * e.Graphics.DpiY;
+                        
+                        e.Graphics.DrawImage(bitmap, 0, 0, widthInGraphicsUnits, heightInGraphicsUnits);
                         currentPage++;
                         e.HasMorePages = currentPage < pages.Count;
                     }
