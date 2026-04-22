@@ -1,7 +1,9 @@
-using Docnet.Core;
-using Docnet.Core.Models;
+using Newtonsoft.Json;
 using Newtonsoft.Json;
 using OdooPrintServer.Properties;
+using PDFtoImage;
+using SkiaSharp;
+using System.Drawing;
 using System.Drawing.Printing;
 using System.Net;
 using System.Net.Http.Json;
@@ -226,17 +228,40 @@ namespace OdooPrintServer
                 string pdfPath = Path.ChangeExtension(filePath, ".pdf");
                 File.Move(filePath, pdfPath);
 
-                // Use bundled SumatraPDF for silent, verb-free printing.
-                string sumatraPath = Path.Combine(AppContext.BaseDirectory, "SumatraPDF.exe");
-                var psi = new System.Diagnostics.ProcessStartInfo(sumatraPath)
+                // Use PDFtoImage to render PDF pages and print them
+                var pdfBytes = File.ReadAllBytes(pdfPath);
+                var pages = Conversion.ToImages(pdfBytes).ToList();
+                int currentPage = 0;
+
+                var printDoc = new PrintDocument();
+                printDoc.PrinterSettings.PrinterName = printerSelection.Settings.PrinterName;
+                printDoc.PrinterSettings.Copies = printerSelection.Settings.Copies;
+                printDoc.PrinterSettings.Collate = printerSelection.Settings.Collate;
+                printDoc.PrinterSettings.Duplex = printerSelection.Settings.Duplex;
+
+                printDoc.PrintPage += (sender, e) =>
                 {
-                    Arguments = $"-print-to \"{printerSelection.Settings.PrinterName}\" -silent \"{pdfPath}\"",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
+                    if (currentPage < pages.Count)
+                    {
+                        using var bitmap = pages[currentPage].ToBitmap();
+                        e.Graphics!.DrawImage(bitmap, e.PageBounds);
+                        currentPage++;
+                        e.HasMorePages = currentPage < pages.Count;
+                    }
                 };
 
-                System.Diagnostics.Process.Start(psi);
+                printDoc.Print();
+                
+                // Clean up SKBitmap objects
+                foreach (var page in pages)
+                {
+                    page?.Dispose();
+                }
+
                 logs.AppendText($"Sent print job to printer {printerSelection.Settings.PrinterName}." + Environment.NewLine);
+                
+                // Clean up temporary file
+                try { File.Delete(pdfPath); } catch { }
             }
             catch (Exception e)
             {
@@ -581,6 +606,17 @@ namespace OdooPrintServer
         private void logs_TextChanged(object sender, EventArgs e)
         {
 
+        }
+    }
+
+    public static class SKBitmapExtensions
+    {
+        public static Bitmap ToBitmap(this SKBitmap skBitmap)
+        {
+            using var ms = new MemoryStream();
+            skBitmap.Encode(ms, SKEncodedImageFormat.Png, 100);
+            ms.Seek(0, SeekOrigin.Begin);
+            return new Bitmap(ms);
         }
     }
 }

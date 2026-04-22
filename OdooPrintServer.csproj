@@ -17,7 +17,7 @@
 
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-    <PackageReference Include="Docnet.Core" Version="2.6.0" />
+    <PackageReference Include="PDFtoImage" Version="5.2.1" />
     <PackageReference Include="Velopack" Version="0.0.*" />
   </ItemGroup>
 
@@ -28,15 +28,6 @@
       <DependentUpon>Settings.settings</DependentUpon>
     </Compile>
   </ItemGroup>
-    
-    <ItemGroup>
-        <None Update="SumatraPDF.exe">
-          <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        </None>
-        <None Update="SumatraPDF.exe">
-            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-        </None>
-    </ItemGroup>
 
   <ItemGroup>
     <None Update="Properties\Settings.settings">
