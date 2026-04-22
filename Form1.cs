@@ -242,14 +242,52 @@ namespace OdooPrintServer
                 printDoc.PrinterSettings.Collate = printerSelection.Settings.Collate;
                 printDoc.PrinterSettings.Duplex = printerSelection.Settings.Duplex;
 
-                // Get the first page dimensions to set default page size
+                // Get the first page dimensions and try to find a matching paper size
                 if (pages.Count > 0)
                 {
                     var firstPage = pages[0];
                     // Convert pixels to hundredths of an inch (PrintDocument uses 1/100th inch units)
-                    int widthInHundredths = (int)((firstPage.Width / (double)dpi) * 100);
-                    int heightInHundredths = (int)((firstPage.Height / (double)dpi) * 100);
-                    printDoc.DefaultPageSettings.PaperSize = new PaperSize("Custom", widthInHundredths, heightInHundredths);
+                    int widthInHundredths = (int)Math.Round((firstPage.Width / (double)dpi) * 100);
+                    int heightInHundredths = (int)Math.Round((firstPage.Height / (double)dpi) * 100);
+                    
+                    logs.AppendText($"PDF dimensions: {firstPage.Width}x{firstPage.Height} pixels @ {dpi} DPI = {widthInHundredths/100.0}\" x {heightInHundredths/100.0}\"" + Environment.NewLine);
+                    
+                    // Try to find a matching paper size from the printer's supported sizes
+                    PaperSize? matchingSize = null;
+                    var availableSizes = new List<string>();
+                    foreach (PaperSize size in printDoc.PrinterSettings.PaperSizes)
+                    {
+                        // Collect available sizes for debugging
+                        if (size.Kind != PaperKind.Custom)
+                        {
+                            availableSizes.Add($"{size.PaperName} ({size.Width/100.0}\"x{size.Height/100.0}\")");
+                        }
+                        
+                        // Allow 2% tolerance for matching (some printers have slight variations)
+                        if (Math.Abs(size.Width - widthInHundredths) <= Math.Max(widthInHundredths * 0.02, 5) &&
+                            Math.Abs(size.Height - heightInHundredths) <= Math.Max(heightInHundredths * 0.02, 5))
+                        {
+                            matchingSize = size;
+                            break;
+                        }
+                    }
+                    
+                    if (matchingSize != null)
+                    {
+                        // Use the printer's native paper size
+                        printDoc.DefaultPageSettings.PaperSize = matchingSize;
+                        logs.AppendText($"✓ Matched printer paper size: {matchingSize.PaperName} ({matchingSize.Width/100.0}\" x {matchingSize.Height/100.0}\")" + Environment.NewLine);
+                    }
+                    else
+                    {
+                        // Create a custom paper size
+                        var customSize = new PaperSize("Custom", widthInHundredths, heightInHundredths);
+                        printDoc.DefaultPageSettings.PaperSize = customSize;
+                        logs.AppendText($"⚠ No matching paper size found for {widthInHundredths/100.0}\" x {heightInHundredths/100.0}\"" + Environment.NewLine);
+                        logs.AppendText($"⚠ Using custom size - printer driver may override!" + Environment.NewLine);
+                        logs.AppendText($"Available sizes: {string.Join(", ", availableSizes.Take(5))}" + (availableSizes.Count > 5 ? $" and {availableSizes.Count - 5} more..." : "") + Environment.NewLine);
+                        logs.AppendText($"→ Configure your printer driver to support {widthInHundredths/100.0}\" x {heightInHundredths/100.0}\" labels." + Environment.NewLine);
+                    }
                 }
 
                 printDoc.PrintPage += (sender, e) =>
@@ -259,19 +297,14 @@ namespace OdooPrintServer
                         var skBitmap = pages[currentPage];
                         using var bitmap = skBitmap.ToBitmap();
                         
-                        // Calculate the actual page dimensions in hundredths of an inch
-                        int widthInHundredths = (int)((skBitmap.Width / (double)dpi) * 100);
-                        int heightInHundredths = (int)((skBitmap.Height / (double)dpi) * 100);
-                        
-                        // Update page size for this specific page if dimensions differ
-                        if (e.PageSettings.PaperSize.Width != widthInHundredths || 
-                            e.PageSettings.PaperSize.Height != heightInHundredths)
+                        // Log what the printer driver is actually using
+                        if (currentPage == 0)
                         {
-                            e.PageSettings.PaperSize = new PaperSize("Custom", widthInHundredths, heightInHundredths);
+                            logs.AppendText($"Printer is using: {e.PageSettings.PaperSize.PaperName} ({e.PageSettings.PaperSize.Width/100.0}\" x {e.PageSettings.PaperSize.Height/100.0}\"), PrintableArea: {e.PageBounds.Width/e.Graphics!.DpiX:F2}\" x {e.PageBounds.Height/e.Graphics.DpiY:F2}\"" + Environment.NewLine);
                         }
                         
                         // Draw the image at the correct physical size
-                        // Convert from pixels to hundredths of an inch for the drawing rectangle
+                        // The page size is already set, so just draw at the correct scale
                         float widthInInches = skBitmap.Width / (float)dpi;
                         float heightInInches = skBitmap.Height / (float)dpi;
                         float widthInGraphicsUnits = widthInInches * e.Graphics!.DpiX;
