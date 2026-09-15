@@ -236,15 +236,6 @@ namespace OdooPrintServer
                 var pages = Conversion.ToImages(pdfBytes, options: options).ToList();
                 int currentPage = 0;
 
-                // Pre-compute each page's paper size in hundredths of an inch
-                var pageSizes = pages
-                    .Select(p => new PaperSize("Custom",
-                        (int)Math.Round((p.Width  / (double)dpi) * 100),
-                        (int)Math.Round((p.Height / (double)dpi) * 100)))
-                    .ToList();
-
-                logs.AppendText($"PDF page 1 dimensions: {pages[0].Width}x{pages[0].Height}px @ {dpi} DPI = {pageSizes[0].Width/100.0}\" x {pageSizes[0].Height/100.0}\"" + Environment.NewLine);
-
                 var printDoc = new PrintDocument();
                 printDoc.DefaultPageSettings.Margins = new Margins(0, 0, 0, 0);
                 printDoc.OriginAtMargins = false;
@@ -252,26 +243,45 @@ namespace OdooPrintServer
                 printDoc.PrinterSettings.Copies = printerSelection.Settings.Copies;
                 printDoc.PrinterSettings.Collate = printerSelection.Settings.Collate;
                 printDoc.PrinterSettings.Duplex = printerSelection.Settings.Duplex;
-                printDoc.DefaultPageSettings.PaperSize = pageSizes[0];
-                //printDoc.DefaultPageSettings.Landscape = pageSizes[0].Width > pageSizes[0].Height;
+
+                // Pre-compute each page's paper size (hundredths of an inch) and orientation.
+                // Label drivers such as DYMO only honor their own paper sizes, which are defined
+                // portrait (e.g. 30252 Address = 1.09" x 3.5") and printed landscape.
+                var pageLayouts = pages.Select(p =>
+                {
+                    int width = (int)Math.Round(p.Width / (double)dpi * 100);
+                    int height = (int)Math.Round(p.Height / (double)dpi * 100);
+                    return FindPaperSize(printDoc.PrinterSettings, width, height);
+                }).ToList();
+
+                logs.AppendText($"PDF has {pages.Count} page(s). Page 1: {pages[0].Width}x{pages[0].Height}px @ {dpi} DPI = {pages[0].Width / (double)dpi:0.##}\" x {pages[0].Height / (double)dpi:0.##}\"" + Environment.NewLine);
+                logs.AppendText($"Using paper size {pageLayouts[0].Paper.PaperName} ({pageLayouts[0].Paper.Width / 100.0}\" x {pageLayouts[0].Paper.Height / 100.0}\"), landscape: {pageLayouts[0].Landscape}" + Environment.NewLine);
+
+                printDoc.DefaultPageSettings.PaperSize = pageLayouts[0].Paper;
+                printDoc.DefaultPageSettings.Landscape = pageLayouts[0].Landscape;
 
                 // QueryPageSettings fires right before PrintPage for each page,
                 // which is the correct place to enforce the paper size per page.
                 printDoc.QueryPageSettings += (sender, e) =>
                 {
-                    var size = pageSizes[currentPage];
-                    e.PageSettings.PaperSize = size;
+                    e.PageSettings.PaperSize = pageLayouts[currentPage].Paper;
+                    e.PageSettings.Landscape = pageLayouts[currentPage].Landscape;
                     e.PageSettings.Margins = new Margins(0, 0, 0, 0);
-                    e.PageSettings.PaperSize = pageSizes[currentPage];
                 };
 
                 printDoc.PrintPage += (sender, e) =>
                 {
                     var skBitmap = pages[currentPage];
                     using var bitmap = skBitmap.ToBitmap();
+                    var graphics = e.Graphics!;
 
-                    var paper = e.PageSettings.PaperSize;
-                    e.Graphics!.DrawImage(bitmap, 0, 0, paper.Width, paper.Height);
+                    if (currentPage == 0)
+                        logs.AppendText($"Printer page bounds: {e.PageBounds.Width / 100.0}\" x {e.PageBounds.Height / 100.0}\", hard margins: {e.PageSettings.HardMarginX / 100.0}\", {e.PageSettings.HardMarginY / 100.0}\"" + Environment.NewLine);
+
+                    // With OriginAtMargins = false the origin sits at the printer's hard margins,
+                    // so shift back to the physical corner of the label and draw at the PDF's true size.
+                    graphics.TranslateTransform(-e.PageSettings.HardMarginX, -e.PageSettings.HardMarginY);
+                    graphics.DrawImage(bitmap, 0, 0, skBitmap.Width / (float)dpi * 100, skBitmap.Height / (float)dpi * 100);
 
                     currentPage++;
                     e.HasMorePages = currentPage < pages.Count;
@@ -294,6 +304,35 @@ namespace OdooPrintServer
             {
                 logs.AppendText($"Error: {e}" + Environment.NewLine);
             }
+        }
+
+        /// <summary>
+        /// Finds the printer's own paper size closest to the given page size (hundredths of an inch).
+        /// A paper that only matches when rotated is used in landscape. Falls back to a custom size.
+        /// </summary>
+        private static (PaperSize Paper, bool Landscape) FindPaperSize(PrinterSettings settings, int width, int height)
+        {
+            static bool Near(int actual, int expected) => Math.Abs(actual - expected) <= Math.Max(expected * 0.03, 5);
+
+            PaperSize? best = null;
+            bool bestLandscape = false;
+            int bestDiff = int.MaxValue;
+            foreach (PaperSize size in settings.PaperSizes)
+            {
+                if (Near(size.Width, width) && Near(size.Height, height))
+                {
+                    int diff = Math.Abs(size.Width - width) + Math.Abs(size.Height - height);
+                    if (diff < bestDiff) (best, bestLandscape, bestDiff) = (size, false, diff);
+                }
+
+                if (Near(size.Height, width) && Near(size.Width, height))
+                {
+                    int diff = Math.Abs(size.Height - width) + Math.Abs(size.Width - height);
+                    if (diff < bestDiff) (best, bestLandscape, bestDiff) = (size, true, diff);
+                }
+            }
+
+            return best != null ? (best, bestLandscape) : (new PaperSize("Custom", width, height), false);
         }
 
         public Form1()
